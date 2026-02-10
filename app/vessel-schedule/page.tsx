@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { Fragment, useEffect, useMemo, useState } from "react"
 
 type Port = { code: string; name: string }
 type Vessel = { id: string; name: string }
@@ -14,6 +14,8 @@ type ScheduleStop = {
   transitDays: number
   dwellDays: number
 }
+
+type FormattedScheduleRow = Array<ScheduleStop | null>
 
 type Matrix = Record<string, Record<string, number>>
 
@@ -90,6 +92,7 @@ const portMap = Object.fromEntries(ports.map((p) => [p.code, p]))
 
 const pad = (n: number) => `${n}`.padStart(2, "0")
 const toInput = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+const toDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`
 const parseDate = (value: string) => {
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed
@@ -164,24 +167,50 @@ export default function VesselSchedulePage() {
     return list
   }, [etaOverrides, matrix, months, route, startDate])
 
+  const formattedScheduleRows = useMemo(() => {
+    if (route.length === 0) return [] as FormattedScheduleRow[]
+
+    const rows: FormattedScheduleRow[] = []
+    for (const stop of schedule) {
+      const rowIndex = Math.floor(stop.index / route.length)
+      const routeIndex = stop.index % route.length
+
+      if (!rows[rowIndex]) {
+        rows[rowIndex] = Array.from({ length: route.length }, () => null)
+      }
+
+      rows[rowIndex][routeIndex] = stop
+    }
+
+    return rows
+  }, [route.length, schedule])
+
   const addPortToRoute = () => setRoute((prev) => [...prev, { portCode: addPortCode, dwellDays: 1 }])
   const removePortFromRoute = (i: number) => setRoute((prev) => prev.filter((_, idx) => idx !== i))
   const updateRoutePort = (i: number, patch: Partial<RoutePort>) =>
     setRoute((prev) => prev.map((rp, idx) => (idx === i ? { ...rp, ...patch } : rp)))
 
   const exportCsv = () => {
-    const header = ["Судно", "Порт", "Приход", "Отход", "Переход (дней)", "Стоянка (дней)"]
+    const routePorts = route.map((rp) => portMap[rp.portCode]?.name ?? rp.portCode)
+    const headerPorts = routePorts.flatMap((name) => [name, ""])
+    const headerArrivals = routePorts.flatMap(() => ["Приход", "Отход"])
     const vesselName = vessels.find((v) => v.id === selectedVesselId)?.name ?? selectedVesselId
-    const rows = schedule.map((item) => [
-      vesselName,
-      portMap[item.portCode]?.name ?? item.portCode,
-      item.eta.toLocaleString("ru-RU"),
-      item.etd.toLocaleString("ru-RU"),
-      item.transitDays.toString(),
-      item.dwellDays.toString(),
-    ])
+    const rows = formattedScheduleRows.map((row) =>
+      row.flatMap((stop) => {
+        if (!stop) return ["", ""]
+        return [toDate(stop.eta), toDate(stop.etd)]
+      }),
+    )
 
-    const content = [header, ...rows].map((r) => r.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(";")).join("\n")
+    const content = [
+      [`Расписание движения судна ${vesselName}`],
+      [],
+      headerPorts,
+      headerArrivals,
+      ...rows,
+    ]
+      .map((r) => r.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(";"))
+      .join("\n")
 
     const blob = new Blob([content], { type: "text/csv;charset=utf-8;" })
     const url = URL.createObjectURL(blob)
@@ -310,17 +339,74 @@ export default function VesselSchedulePage() {
       </section>
 
       <section className="rounded-lg border p-4">
-        <h2 className="mb-3 text-lg font-semibold">Полугодовое табличное расписание</h2>
+        <h2 className="mb-1 text-lg font-semibold">Готовая таблица (формат для Word)</h2>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Структура соответствует шаблону: в шапке порты маршрута, ниже для каждого порта отдельные колонки «Приход / Отход».
+        </p>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px] border-collapse text-sm">
+          <table className="w-full min-w-[1100px] border-collapse text-center text-sm">
+            <thead>
+              <tr>
+                <th className="border px-2 py-2 text-lg font-semibold" colSpan={Math.max(route.length * 2, 1)}>
+                  Расписание движения судна {vessels.find((v) => v.id === selectedVesselId)?.name ?? selectedVesselId}
+                </th>
+              </tr>
+              <tr>
+                <th className="border px-2 py-2" colSpan={Math.max(route.length * 2, 1)}>
+                  {route.length > 0
+                    ? `${toDate(schedule[0]?.eta ?? parseDate(startDate))} — ${toDate(schedule[schedule.length - 1]?.etd ?? parseDate(startDate))}`
+                    : "Маршрут не задан"}
+                </th>
+              </tr>
+              <tr className="bg-muted/20">
+                {route.map((rp, i) => (
+                  <th key={`${rp.portCode}-${i}`} className="border px-2 py-2" colSpan={2}>
+                    {portMap[rp.portCode]?.name ?? rp.portCode}
+                  </th>
+                ))}
+              </tr>
+              <tr className="bg-muted/20">
+                {route.map((rp, i) => (
+                  <Fragment key={`${rp.portCode}-headers-${i}`}>
+                    <th key={`${rp.portCode}-eta-${i}`} className="border px-2 py-2">
+                      Приход
+                    </th>
+                    <th key={`${rp.portCode}-etd-${i}`} className="border px-2 py-2">
+                      Отход
+                    </th>
+                  </Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {formattedScheduleRows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((stop, i) => (
+                    <Fragment key={`row-${rowIndex}-port-${i}`}>
+                      <td key={`eta-${rowIndex}-${i}`} className="border px-2 py-2 whitespace-nowrap">
+                        {stop ? toDate(stop.eta) : ""}
+                      </td>
+                      <td key={`etd-${rowIndex}-${i}`} className="border px-2 py-2 whitespace-nowrap">
+                        {stop ? toDate(stop.etd) : ""}
+                      </td>
+                    </Fragment>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="rounded-lg border p-4">
+        <h2 className="mb-3 text-lg font-semibold">Точечная ручная правка ETA</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[900px] border-collapse text-sm">
             <thead>
               <tr className="border-b bg-muted/20 text-left">
                 <th className="px-2 py-2">#</th>
                 <th className="px-2 py-2">Порт</th>
-                <th className="px-2 py-2">Приход</th>
-                <th className="px-2 py-2">Отход</th>
-                <th className="px-2 py-2">Переход (дней)</th>
-                <th className="px-2 py-2">Стоянка (дней)</th>
+                <th className="px-2 py-2">Текущий приход</th>
                 <th className="px-2 py-2">ETA ручная правка</th>
               </tr>
             </thead>
@@ -330,9 +416,6 @@ export default function VesselSchedulePage() {
                   <td className="px-2 py-2">{item.index + 1}</td>
                   <td className="px-2 py-2">{portMap[item.portCode]?.name ?? item.portCode}</td>
                   <td className="px-2 py-2 whitespace-nowrap">{item.eta.toLocaleString("ru-RU")}</td>
-                  <td className="px-2 py-2 whitespace-nowrap">{item.etd.toLocaleString("ru-RU")}</td>
-                  <td className="px-2 py-2">{item.transitDays}</td>
-                  <td className="px-2 py-2">{item.dwellDays}</td>
                   <td className="px-2 py-2">
                     <input
                       type="datetime-local"
