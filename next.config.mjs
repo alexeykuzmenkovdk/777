@@ -31,8 +31,6 @@ const nextConfig = {
       }
     ],
     
-    // Качество изображений по умолчанию
-    quality: 85,
     unoptimized: true,
   },
   
@@ -71,8 +69,6 @@ const nextConfig = {
     ]
   },
   
-  // Оптимизация производительности
-  swcMinify: true,
   
   // Оптимизация для мобильных
   poweredByHeader: false,
